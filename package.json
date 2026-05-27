@@ -1,0 +1,24 @@
+{
+  "name": "bpd",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "audit": "npm audit"
+  },
+  "dependencies": {
+    "bpd": ".",
+    "idb": "^8.0.3",
+    "leaflet": "^1.9.4",
+    "marked": "^18.0.4",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}
