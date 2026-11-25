@@ -1,37 +1,5 @@
 import type { WatcherPlugin, WatcherEvent } from '../types';
 
-// ─── CORS PROXY ───
-const CORS_PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
-
-async function fetchWithCORS(url: string): Promise<Response> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (resp.ok) return resp;
-  } catch {
-    // Direct failed
-  }
-
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (resp.ok) return resp;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`All CORS proxies failed for ${url}`);
-}
-
 // ─── REDDIT POST ───
 interface RedditPost {
   title: string;
@@ -151,8 +119,21 @@ export const trendingPlugin: WatcherPlugin<{ items: TrendingItem[] }> = {
     // Fetch Reddit posts from all subreddits in parallel
     const redditPromises = subreddits.map(async (sub) => {
       try {
-        const url = `https://www.reddit.com/r/${sub}/rising.json?limit=25`;
-        const resp = await fetchWithCORS(url);
+        // Same-origin server endpoint that fetches via Reddit app-only OAuth
+        // (see /api/reddit in vite.config.ts). Avoids the 403 IP wall on the
+        // public .json endpoints and keeps the client secret server-side.
+        const url = `/api/reddit?sub=${encodeURIComponent(sub)}&sort=rising&limit=25`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (!resp.ok) {
+          // Surface the server's clean JSON error (e.g. "OAuth not configured")
+          // instead of letting resp.json() below throw on an HTML body.
+          let msg = `Reddit HTTP ${resp.status}`;
+          try {
+            const e = await resp.json();
+            if (e?.error) msg = e.error;
+          } catch { /* non-JSON body */ }
+          throw new Error(msg);
+        }
         const data = await resp.json();
         const posts = (data.data?.children || [])
           .map((c: any) => parseRedditPost(c, sub))

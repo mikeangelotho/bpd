@@ -1,41 +1,5 @@
 import type { WatcherPlugin, WatcherEvent } from '../types';
-
-// ─── CORS PROXIES (same as RSS) ───
-const CORS_PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
-
-async function fetchWithCORS(url: string, apiKey: string): Promise<Response> {
-  // Try direct first
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'X-Api-Key': apiKey },
-    });
-    clearTimeout(timeoutId);
-    if (resp.ok) return resp;
-  } catch {
-    // Direct failed
-  }
-
-  // Fall back to CORS proxies
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (resp.ok) return resp;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`All CORS proxies failed for NewsAPI`);
-}
+import { serverFetch } from '../lib/serverFetch';
 
 // ─── ENDPOINT ───
 const BASE_URL = 'https://newsapi.org/v2';
@@ -81,7 +45,7 @@ export const newsApiPlugin: WatcherPlugin<{ items: Array<Record<string, string>>
       if (q) params.set('q', q);
 
       const url = `${BASE_URL}/top-headlines?${params.toString()}`;
-      const resp = await fetchWithCORS(url, apiKey);
+      const resp = await serverFetch(url);
       const data = await resp.json();
 
       if (data.status === 'error') {
@@ -121,7 +85,7 @@ export const newsApiPlugin: WatcherPlugin<{ items: Array<Record<string, string>>
     params.set('sortBy', sortBy);
 
     const url = `${BASE_URL}/everything?${params.toString()}`;
-    const resp = await fetchWithCORS(url, apiKey);
+    const resp = await serverFetch(url);
     const data = await resp.json();
 
     if (data.status === 'error') {

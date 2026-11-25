@@ -1,39 +1,5 @@
 import type { WatcherPlugin, WatcherEvent } from '../types';
-
-// ─── CORS PROXY FALLBACK ───
-// OpenSky doesn't allow browser CORS, so we proxy the request.
-// Try direct first (in case it's ever enabled), then fall back to proxies.
-const CORS_PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
-
-async function fetchWithCORS(url: string): Promise<Response> {
-  // Try direct first
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (resp.ok) return resp;
-  } catch {
-    // Direct failed — try proxies
-  }
-
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (resp.ok) return resp;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`All CORS proxies failed for OpenSky`);
-}
+import { serverFetch } from '../lib/serverFetch';
 
 // ─── AIRCRAFT DATA (OpenSky format) ───
 // OpenSky returns positional arrays, not named objects.
@@ -106,19 +72,16 @@ export const adsbPlugin: WatcherPlugin<{ aircraft: OpenSkyState[] }> = {
     const directUrl = `https://opensky-network.org/api/states/all?lamin=${laminClamped}&lomin=${lomin}&lamax=${lamaxClamped}&lomax=${lomax}`;
 
     async function fetchOpenSky(): Promise<Response> {
-      // Try dev proxy first (works when running `vite dev`)
+      // Primary: same-origin Vite dev proxy (/api/opensky -> opensky-network.org/api)
       try {
-        const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 8000);
-        const resp = await fetch(devPath, { signal: c.signal });
-        clearTimeout(t);
+        const resp = await fetch(devPath, { signal: AbortSignal.timeout(8000) });
         if (resp.ok) return resp;
-        // 404 from dev proxy means we're in production
+        // Non-OK (e.g. 404 in a static build, or an upstream error) — fall through.
       } catch {
-        // Dev proxy unavailable (production build)
+        // Dev proxy unavailable — fall through to the generic server proxy.
       }
-      // Fall back to CORS proxy chain
-      return fetchWithCORS(directUrl);
+      // Fallback: shared server proxy (with public CORS proxies behind it).
+      return serverFetch(directUrl);
     }
 
     try {

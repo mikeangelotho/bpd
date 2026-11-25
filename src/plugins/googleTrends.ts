@@ -1,36 +1,5 @@
 import type { WatcherPlugin, WatcherEvent } from '../types';
-
-// ─── CORS PROXY ───
-const CORS_PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
-
-async function fetchWithCORS(url: string): Promise<Response> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (resp.ok) return resp;
-  } catch {
-    // Direct failed
-  }
-
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (resp.ok) return resp;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`All CORS proxies failed for ${url}`);
-}
+import { serverFetch } from '../lib/serverFetch';
 
 // ─── GOOGLE TRENDING TOPIC ───
 interface TrendingTopic {
@@ -92,7 +61,7 @@ export const googleTrendsPlugin: WatcherPlugin<{ items: TrendItem[] }> = {
     const url = `https://trends.google.com/trending/rss?geo=${encodeURIComponent(geo)}`;
     console.log(`[google-trends] Fetching: ${url}`);
 
-    const resp = await fetchWithCORS(url);
+    const resp = await serverFetch(url);
 
     if (!resp.ok) {
       throw new Error(`Google Trends returned HTTP ${resp.status}`);

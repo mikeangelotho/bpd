@@ -8,6 +8,7 @@ import { trendingPlugin } from '../plugins/trending';
 import { googleTrendsPlugin } from '../plugins/googleTrends';
 import { adsbPlugin } from '../plugins/adsb';
 import { weatherPlugin } from '../plugins/openMeteo';
+import { youtubePlugin } from '../plugins/youtube';
 
 /**
  * Register all built-in watcher plugins.
@@ -23,4 +24,5 @@ export function registerBuiltinPlugins(): void {
   registerPlugin(googleTrendsPlugin);
   registerPlugin(adsbPlugin);
   registerPlugin(weatherPlugin);
+  registerPlugin(youtubePlugin);
 }

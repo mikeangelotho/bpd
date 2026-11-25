@@ -1,11 +1,22 @@
 import { type Component, Show, createMemo, createSignal } from 'solid-js';
 import type { WatcherState } from '../types';
-import { state, setSelectedWatcher, removeWatcher, setExpandedWatcher, setViewMode, moveWatcher, getOrderedWatchers, setEditingWatcherId } from '../store/appStore';
+import {
+  state,
+  setSelectedWatcher,
+  removeWatcher,
+  setEditingWatcherId,
+  minimizeWindow,
+  toggleMaximize,
+} from '../store/appStore';
 import { CardBody } from './CardBody';
 import { cancelWatcher, describeCron, refreshWatcher } from '../engine/pluginRegistry';
 
 interface Props {
   watcher: WatcherState;
+  /** Begin dragging the window (pointer down on the title bar). */
+  onDragStart?: (e: PointerEvent) => void;
+  /** Begin resizing the window (pointer down on the resize handle). */
+  onResizeStart?: (e: PointerEvent) => void;
 }
 
 const ICONS: Record<string, string> = {
@@ -17,12 +28,15 @@ const ICONS: Record<string, string> = {
   'google-trends': '🔥',
   'adsb-exchange': '✈',
   'open-meteo': '🌡',
+  'youtube': '▶',
 };
 
 export const WatcherCard: Component<Props> = (props) => {
   const w = () => props.watcher;
   const [showActions, setShowActions] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
+
+  const isMaximized = () => state.maximizedWatcher === w().id;
 
   const statusLabel = createMemo(() => {
     const s = w().status;
@@ -57,30 +71,9 @@ export const WatcherCard: Component<Props> = (props) => {
     return `Every ${Math.round(sec / 3600)}h`;
   });
 
-  const orderedList = createMemo(() => getOrderedWatchers());
-  const canMoveUp = createMemo(() => {
-    const list = orderedList();
-    const idx = list.findIndex((x) => x.id === w().id);
-    return idx > 0;
-  });
-  const canMoveDown = createMemo(() => {
-    const list = orderedList();
-    const idx = list.findIndex((x) => x.id === w().id);
-    return idx >= 0 && idx < list.length - 1;
-  });
-
   function handleDelete() {
     cancelWatcher(w().id);
     removeWatcher(w().id);
-  }
-
-  function handleExpand() {
-    setViewMode('expanded');
-    setExpandedWatcher(w().id);
-  }
-
-  function handleMove(direction: 'up' | 'down') {
-    moveWatcher(w().id, direction);
   }
 
   async function handleRefresh() {
@@ -92,25 +85,42 @@ export const WatcherCard: Component<Props> = (props) => {
     }
   }
 
+  function handleTitlePointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    setSelectedWatcher(w().id);
+    if (!isMaximized()) props.onDragStart?.(e);
+  }
+
+  const iconBtn: Record<string, string | number> = {
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    color: 'var(--text-muted)',
+    width: '16px',
+    height: '16px',
+    display: 'flex',
+    'align-items': 'center',
+    'justify-content': 'center',
+    'font-size': '9px',
+    cursor: 'pointer',
+    padding: 0,
+    'line-height': 1,
+  };
+
   return (
     <div
       class="watcher-card"
       classList={{ selected: state.selectedWatcher === w().id }}
-      onClick={() => setSelectedWatcher(state.selectedWatcher === w().id ? null : w().id)}
-      onDblClick={handleExpand}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
       style={{
-        'margin-bottom': '12px',
+        height: '100%',
         background: 'rgba(10, 10, 26, 0.85)',
         border: `1px solid ${state.selectedWatcher === w().id ? 'rgba(0, 229, 255, 0.3)' : 'var(--border)'}`,
-        backdropFilter: 'blur(8px)',
+        'backdrop-filter': 'blur(8px)',
         position: 'relative',
         overflow: 'hidden',
         'clip-path': 'polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px))',
-        cursor: 'pointer',
         transition: 'border-color 0.2s',
-        'max-height': '520px',
         display: 'flex',
         'flex-direction': 'column',
       }}
@@ -128,14 +138,19 @@ export const WatcherCard: Component<Props> = (props) => {
         }}
       />
 
-      {/* Header */}
+      {/* Title bar — drag handle */}
       <div
+        onPointerDown={handleTitlePointerDown}
+        onDblClick={() => toggleMaximize(w().id)}
         style={{
           display: 'flex',
           'align-items': 'center',
           gap: '6px',
           padding: '8px 12px 6px',
           'flex-shrink': 0,
+          cursor: isMaximized() ? 'default' : 'grab',
+          'touch-action': 'none',
+          'user-select': 'none',
         }}
       >
         <div
@@ -168,141 +183,58 @@ export const WatcherCard: Component<Props> = (props) => {
         >
           {w().name}
         </span>
-        <span
-          style={{
-            'font-size': '10px',
-            color: statusColor(),
-            'letter-spacing': '0.05em',
-          }}
-        >
+        <span style={{ 'font-size': '10px', color: statusColor(), 'letter-spacing': '0.05em', 'flex-shrink': 0 }}>
           ● {statusLabel()}
         </span>
 
-        {/* Refresh button */}
-        <button
-          onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
-          title="Refresh now"
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--border)',
-            color: 'var(--text-muted)',
-            width: '16px',
-            height: '16px',
-            display: 'flex',
-            'align-items': 'center',
-            'justify-content': 'center',
-            'font-size': '9px',
-            cursor: refreshing() ? 'wait' : 'pointer',
-            padding: 0,
-            'line-height': 1,
-            transition: 'border-color 0.15s, color 0.15s',
-            opacity: refreshing() ? 0.5 : 1,
-          }}
-          onMouseEnter={(e) => { if (!refreshing()) { (e.target as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.target as HTMLElement).style.color = 'var(--accent-cyan)'; } }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
+        {/* Window controls — stop pointer so clicks don't start a drag */}
+        <div
+          style={{ display: 'flex', gap: '2px', 'margin-left': '2px', 'flex-shrink': 0 }}
+          onPointerDown={(e) => e.stopPropagation()}
         >
-          {refreshing() ? (
-            <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px solid currentColor', 'border-top-color': 'transparent', 'border-radius': '50%', animation: 'spin 0.8s linear infinite' }} />
-          ) : (
-            <span innerHTML="&#8635;" />
-          )}
-        </button>
-
-        {/* CRUD buttons (appear on hover) */}
-        <Show when={showActions()}>
-          <div
-            style={{ display: 'flex', gap: '2px', 'margin-left': '2px' }}
-            onClick={(e) => e.stopPropagation()}
+          {/* Refresh */}
+          <button
+            onClick={handleRefresh}
+            title="Refresh now"
+            style={{ ...iconBtn, cursor: refreshing() ? 'wait' : 'pointer', opacity: refreshing() ? 0.5 : 1 }}
+            onMouseEnter={(e) => { if (!refreshing()) { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-cyan)'; } }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
           >
-            {/* Move up */}
+            {refreshing() ? (
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px solid currentColor', 'border-top-color': 'transparent', 'border-radius': '50%', animation: 'spin 0.8s linear infinite' }} />
+            ) : (
+              <span innerHTML="&#8635;" />
+            )}
+          </button>
+
+          <Show when={showActions()}>
+            {/* Minimize */}
             <button
-              onClick={() => handleMove('up')}
-              title="Move up"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                color: canMoveUp() ? 'var(--text-muted)' : 'var(--text-dim)',
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'font-size': '8px',
-                cursor: canMoveUp() ? 'pointer' : 'not-allowed',
-                padding: 0,
-                'line-height': 1,
-              }}
-              onMouseEnter={(e) => { if (canMoveUp()) { (e.target as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.target as HTMLElement).style.color = 'var(--accent-cyan)'; } }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = canMoveUp() ? 'var(--text-muted)' : 'var(--text-dim)'; }}
+              onClick={() => minimizeWindow(w().id)}
+              title="Minimize to sidebar"
+              style={iconBtn}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-cyan)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
             >
-              ▲
+              ▁
             </button>
-            {/* Move down */}
+            {/* Maximize / restore */}
             <button
-              onClick={() => handleMove('down')}
-              title="Move down"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                color: canMoveDown() ? 'var(--text-muted)' : 'var(--text-dim)',
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'font-size': '8px',
-                cursor: canMoveDown() ? 'pointer' : 'not-allowed',
-                padding: 0,
-                'line-height': 1,
-              }}
-              onMouseEnter={(e) => { if (canMoveDown()) { (e.target as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.target as HTMLElement).style.color = 'var(--accent-cyan)'; } }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = canMoveDown() ? 'var(--text-muted)' : 'var(--text-dim)'; }}
+              onClick={() => toggleMaximize(w().id)}
+              title={isMaximized() ? 'Restore' : 'Maximize'}
+              style={iconBtn}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-cyan)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
             >
-              ▼
+              {isMaximized() ? '🗗' : '⛶'}
             </button>
-            {/* Expand */}
+            {/* Edit */}
             <button
-              onClick={handleExpand}
-              title="View full data"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'font-size': '9px',
-                cursor: 'pointer',
-                padding: 0,
-                'line-height': 1,
-              }}
-              onMouseEnter={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.target as HTMLElement).style.color = 'var(--accent-cyan)'; }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
-            >
-              ⤢
-            </button>
-            {/* Edit — opens popup */}
-            <button
-              onClick={(e) => { e.stopPropagation(); setEditingWatcherId(w().id); }}
+              onClick={() => setEditingWatcherId(w().id)}
               title="Edit watcher"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'font-size': '8px',
-                cursor: 'pointer',
-                padding: 0,
-                'line-height': 1,
-              }}
-              onMouseEnter={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.target as HTMLElement).style.color = 'var(--accent-cyan)'; }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
+              style={iconBtn}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-cyan)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
             >
               ✎
             </button>
@@ -310,31 +242,18 @@ export const WatcherCard: Component<Props> = (props) => {
             <button
               onClick={handleDelete}
               title="Delete watcher"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'font-size': '9px',
-                cursor: 'pointer',
-                padding: 0,
-                'line-height': 1,
-              }}
-              onMouseEnter={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--accent-red)'; (e.target as HTMLElement).style.color = 'var(--accent-red)'; }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
+              style={iconBtn}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-red)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-red)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
             >
               ✕
             </button>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </div>
 
       {/* Body */}
-      <div style={{ flex: 1, 'min-height': 0 }}>
+      <div style={{ flex: 1, 'min-height': 0, 'overflow-y': 'auto' }}>
         <Show when={w().status === 'error'}>
           <div style={{ padding: '8px 12px 10px' }}>
             <div style={{ color: 'var(--accent-red)', 'font-size': '10px' }}>
@@ -357,6 +276,26 @@ export const WatcherCard: Component<Props> = (props) => {
         <span>{scheduleDescription()}</span>
         <span>{timeAgo(w().lastFetch)} ago</span>
       </div>
+
+      {/* Resize handle (bottom-right) — hidden while maximized */}
+      <Show when={!isMaximized()}>
+        <div
+          onPointerDown={(e) => props.onResizeStart?.(e)}
+          title="Resize"
+          style={{
+            position: 'absolute',
+            right: 0,
+            bottom: 0,
+            width: '16px',
+            height: '16px',
+            cursor: 'nwse-resize',
+            'touch-action': 'none',
+            'z-index': 3,
+            background: 'linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--accent-cyan) 100%)',
+            opacity: showActions() ? 0.9 : 0.4,
+          }}
+        />
+      </Show>
     </div>
   );
 };

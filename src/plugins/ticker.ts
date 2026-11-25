@@ -1,4 +1,5 @@
 import type { WatcherPlugin, WatcherEvent } from '../types';
+import { serverFetch } from '../lib/serverFetch';
 
 interface TickerData {
   symbol: string;
@@ -65,46 +66,18 @@ export class CoinGeckoRateLimitError extends Error {
   }
 }
 
-// ─── CORS PROXY ───
-const CORS_PROXIES = [
-  'https://corsproxy.io/?',
-  'https://api.allorigins.win/raw?url=',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
-
-async function fetchWithCORS(url: string): Promise<Response> {
-  // Try direct fetch first — CoinGecko allows CORS
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (resp.ok) return resp;
-    if (resp.status === 429) {
-      throw new CoinGeckoRateLimitError(`CoinGecko rate limit (429). Cooldown required.`);
-    }
+// ─── COINGECKO FETCH ───
+// Routes through the shared server proxy. Surfaces a 429 as CoinGeckoRateLimitError
+// so the scheduler applies its long rate-limit cooldown instead of quick backoff.
+async function fetchCoinGecko(url: string): Promise<Response> {
+  const resp = await serverFetch(url);
+  if (resp.status === 429) {
+    throw new CoinGeckoRateLimitError(`CoinGecko rate limit (429). Cooldown required.`);
+  }
+  if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-  } catch (e) {
-    // Direct failed — try CORS proxies (but NOT for 429 — they'll also be rate-limited)
-    if (e instanceof CoinGeckoRateLimitError) throw e;
-    console.warn(`[ticker] Direct fetch failed, trying CORS proxies:`, e);
   }
-
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (resp.ok) return resp;
-      if (resp.status === 429) {
-        throw new CoinGeckoRateLimitError(`CoinGecko rate limit (429). Cooldown required.`);
-      }
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`All CORS proxies failed for ${url}`);
+  return resp;
 }
 
 // ─── STOCK / CRYPTO TICKER WATCHER ───
@@ -139,7 +112,7 @@ export const tickerPlugin: WatcherPlugin<{ tickers: TickerData[] }> = {
       const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`;
 
       console.log(`[ticker] Fetching: ${url}`);
-      const resp = await fetchWithCORS(url);
+      const resp = await fetchCoinGecko(url);
       const data = await resp.json();
       console.log(`[ticker] CoinGecko response:`, JSON.stringify(data).slice(0, 300));
 

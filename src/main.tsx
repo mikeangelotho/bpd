@@ -1,9 +1,10 @@
 import { render } from 'solid-js/web';
 import { App } from './App';
-import { restoreFromPersistence, rescheduleAllWatchers, state, setWatcher, removeWatcher, pushWatcherEvents, setActiveFilter, PRESET_FILTERS } from './store/appStore';
+import { restoreFromPersistence, rescheduleAllWatchers, runWatcherFetch, state, setWatcher, removeWatcher, setActiveFilter, PRESET_FILTERS } from './store/appStore';
 import { registerBuiltinPlugins } from './plugins';
 import { scheduleWatcher, getAllPlugins, refreshWatcher } from './engine/pluginRegistry';
 import { initAI } from './ai';
+import type { WatcherEvent } from './types';
 import './styles/variables.css';
 
 // Register all built-in plugins
@@ -12,7 +13,7 @@ registerBuiltinPlugins();
 // Restore persisted state, re-schedule watchers, then mount
 restoreFromPersistence().then(() => {
   // Restart polling for all persisted watchers
-  rescheduleAllWatchers(scheduleWatcher, getAllPlugins);
+  rescheduleAllWatchers(scheduleWatcher);
 
   // ─── INITIALIZE AI AGENT ───
   // Query Ollama for available models, pick one, then init the agent.
@@ -20,7 +21,7 @@ restoreFromPersistence().then(() => {
   async function initAIWithModelDiscovery() {
     let chosenModel = 'llama3.2'; // fallback
     try {
-      const resp = await fetch('http://localhost:11434/api/tags', {
+      const resp = await fetch('/api/ollama/api/tags', {
         signal: AbortSignal.timeout(5000),
       });
       if (resp.ok) {
@@ -40,7 +41,7 @@ restoreFromPersistence().then(() => {
       getWatchers: () => ({ ...state.watchers }),
       getAlerts: () => [...state.alerts],
       getAllEvents: () => {
-        const all: typeof state.alerts = []; // WatcherEvent[]
+        const all: WatcherEvent[] = [];
         for (const w of Object.values(state.watchers)) {
           all.push(...w.events);
         }
@@ -61,40 +62,10 @@ restoreFromPersistence().then(() => {
           order: Object.keys(state.watchers).length,
           scheduleMode: 'interval',
         });
-        // Schedule the new watcher
-        const plugins = getAllPlugins();
-        const plugin = plugins.find((p) => p.plugin.id === pluginId);
+        // Schedule the new watcher (shared runner reads config + defaults from the store)
+        const plugin = getAllPlugins().find((p) => p.plugin.id === pluginId);
         if (plugin) {
-          const mergedConfig = { ...config };
-          for (const [key, field] of Object.entries(plugin.plugin.configSchema as Record<string, { default?: unknown }>)) {
-            if (mergedConfig[key] === undefined && field.default !== undefined) {
-              mergedConfig[key] = field.default;
-            }
-          }
-          scheduleWatcher(id, interval, async () => {
-            setWatcher(id, { status: 'loading' });
-            try {
-              const raw = await plugin.plugin.fetch(mergedConfig);
-              const events = plugin.plugin.parse(raw, mergedConfig);
-
-              // Push events in chunks of 50 to avoid blocking the main thread.
-              // OpenSky can return 1000+ aircraft — processing all at once freezes the UI.
-              const CHUNK = 50;
-              for (let i = 0; i < events.length; i += CHUNK) {
-                const chunk = events.slice(i, i + CHUNK);
-                for (const ev of chunk) {
-                  ev.watcherId = id;
-                }
-                pushWatcherEvents(id, chunk);
-                // Yield to the browser between chunks so the UI stays responsive.
-                if (i + CHUNK < events.length) {
-                  await new Promise((r) => setTimeout(r, 0));
-                }
-              }
-            } catch (err) {
-              setWatcher(id, { status: 'error', lastError: String(err) });
-            }
-          });
+          scheduleWatcher(id, interval, () => runWatcherFetch(id));
         }
       },
       removeWatcher,

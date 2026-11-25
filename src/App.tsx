@@ -1,22 +1,16 @@
 import { type Component, Show, createMemo, createSignal, onMount, onCleanup } from 'solid-js';
-import { state, toggleSidebar, toggleTopbar, setEditingWatcherId, toggleFocusMode } from './store/appStore';
+import { state, toggleSidebar, toggleTopbar, setEditingWatcherId, toggleFocusMode, toggleMaximize } from './store/appStore';
 import { Background } from './components/Background';
 import { MapBackgroundComponent } from './components/MapBackground';
 import { TopBar } from './components/TopBar';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { AlertsPanel } from './components/AlertsPanel';
-import { ExpandedView } from './components/ExpandedView';
 import { EditWatcherModal } from './components/EditWatcherModal';
 import { AIChat } from './components/AIChat';
 
 export const App: Component = () => {
   const [chatOpen, setChatOpen] = createSignal(false);
-
-  const expandedWatcher = createMemo(() => {
-    if (state.viewMode !== 'expanded' || !state.expandedWatcher) return null;
-    return state.watchers[state.expandedWatcher];
-  });
 
   const editingWatcher = createMemo(() => {
     const id = state.editingWatcherId;
@@ -26,7 +20,11 @@ export const App: Component = () => {
   // Escape key toggles focus mode (only when not in a modal/input)
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !state.editingWatcherId && !state.expandedWatcher) {
+      if (e.key !== 'Escape' || state.editingWatcherId) return;
+      // Escape first un-maximizes a window, otherwise toggles focus mode.
+      if (state.maximizedWatcher) {
+        toggleMaximize(state.maximizedWatcher);
+      } else {
         toggleFocusMode();
       }
     };
@@ -62,6 +60,10 @@ export const App: Component = () => {
         style={{
           'max-height': state.topbarHidden ? '0px' : 'var(--topbar-height)',
           opacity: state.topbarHidden ? 0 : (state.focusMode ? 0 : 1),
+          overflow: 'hidden',
+          // When collapsed (or in focus mode) the topbar must not intercept clicks over
+          // the content beneath it — otherwise the top row's action bar is unclickable.
+          'pointer-events': state.topbarHidden || state.focusMode ? 'none' : 'auto',
           position: 'relative',
           'z-index': 10,
           transition: state.focusMode
@@ -97,60 +99,46 @@ export const App: Component = () => {
         classList={{ 'focus-overlay': true, 'focus-hidden': state.focusMode }}
         style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', 'z-index': 1 }}
       >
-        <Show when={state.viewMode !== 'expanded'}>
-          {/* Sidebar wrapper — full height */}
-          <div
-            class="sidebar-transition"
-            style={{
-              width: state.sidebarCollapsed ? '0px' : 'var(--sidebar-width)',
-              height: '100%',
-              'flex-shrink': 0,
-            }}
-          >
-            <Sidebar />
-          </div>
+        {/* Sidebar wrapper — full height */}
+        <div
+          class="sidebar-transition"
+          style={{
+            width: state.sidebarCollapsed ? '0px' : 'var(--sidebar-width)',
+            height: '100%',
+            'flex-shrink': 0,
+          }}
+        >
+          <Sidebar />
+        </div>
 
-          {/* Sidebar toggle — appears at left edge when collapsed */}
-          <button
-            class="toggle-btn"
-            classList={{ 'focus-overlay': true, 'focus-hidden': state.focusMode }}
-            onClick={toggleSidebar}
-            style={{
-              position: 'absolute',
-              left: state.sidebarCollapsed ? '8px' : 'calc(var(--sidebar-width) + 8px)',
-              top: '12px',
-              width: '24px',
-              height: '24px',
-              'border-radius': '4px',
-              'z-index': 6,
-              transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-            title={state.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          >
-            {state.sidebarCollapsed ? '▸' : '◂'}
-          </button>
+        {/* Sidebar toggle — appears at left edge when collapsed */}
+        <button
+          class="toggle-btn"
+          classList={{ 'focus-overlay': true, 'focus-hidden': state.focusMode }}
+          onClick={toggleSidebar}
+          style={{
+            position: 'absolute',
+            left: state.sidebarCollapsed ? '8px' : 'calc(var(--sidebar-width) + 8px)',
+            top: '12px',
+            width: '24px',
+            height: '24px',
+            'border-radius': '4px',
+            'z-index': 6,
+            transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
+          title={state.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+        >
+          {state.sidebarCollapsed ? '▸' : '◂'}
+        </button>
 
-          {/* Content — routed by store state */}
-          <Show
-            when={state.currentView === 'dashboard'}
-            fallback={<AlertsPanel />}
-          >
-            <Dashboard />
-          </Show>
+        {/* Content — routed by store state */}
+        <Show
+          when={state.currentView === 'dashboard'}
+          fallback={<AlertsPanel />}
+        >
+          <Dashboard />
         </Show>
       </div>
-
-      {/* Expanded view overlay */}
-      <Show when={expandedWatcher()}>
-        {(watcher) => (
-          <div
-            classList={{ 'focus-overlay': true, 'focus-hidden': state.focusMode }}
-            style={{ position: 'absolute', inset: 0, 'z-index': 100 }}
-          >
-            <ExpandedView watcher={watcher()} />
-          </div>
-        )}
-      </Show>
 
       {/* Edit watcher popup — overlays everything */}
       <Show when={editingWatcher()}>

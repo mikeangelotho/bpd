@@ -6,8 +6,11 @@ import { formatToolsForOllama, formatMessagesForOllama } from './context';
 // Supports tool calling via the /api/chat endpoint.
 // https://github.com/ollama/ollama/blob/main/docs/api.md
 
+// Same-origin path proxied to the local Ollama server by the Vite dev server
+// (see server.proxy['/api/ollama'] in vite.config.ts). Using a relative base avoids
+// mixed-content blocking when the app is served over HTTPS via Tailscale.
 const DEFAULT_CONFIG: Required<Omit<OllamaConfig, 'systemPrompt' | 'model'>> = {
-  baseUrl: 'http://localhost:11434',
+  baseUrl: '/api/ollama',
 };
 
 export class OllamaClient {

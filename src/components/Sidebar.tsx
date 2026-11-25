@@ -1,5 +1,5 @@
 import { type Component, For, createSignal, Show, createMemo } from 'solid-js';
-import { state, setSelectedWatcher, setWatcher, removeWatcher, setBackground, pushWatcherEvent, setViewMode, setExpandedWatcher, getOrderedWatchers, setEditingWatcherId } from '../store/appStore';
+import { state, setSelectedWatcher, setWatcher, removeWatcher, setBackground, runWatcherFetch, toggleMaximize, restoreWindow, getOrderedWatchers, setEditingWatcherId } from '../store/appStore';
 import { getAllPlugins, scheduleWatcher, cancelWatcher } from '../engine/pluginRegistry';
 import { PRESET_FILTERS } from '../store/appStore';
 import type { WatcherState, BackgroundType } from '../types';
@@ -119,10 +119,10 @@ export const Sidebar: Component = () => {
                       <button
                         onClick={() => {
                           setSelectedWatcher(w.id);
-                          setViewMode('expanded');
-                          setExpandedWatcher(w.id);
+                          if (w.minimized) restoreWindow(w.id);
+                          toggleMaximize(w.id);
                         }}
-                        title="Expand"
+                        title="Maximize"
                         style={{
                           background: 'transparent',
                           border: 'none',
@@ -224,6 +224,42 @@ export const Sidebar: Component = () => {
           >
             + Add Watcher
           </div>
+
+          {/* Minimized tray */}
+          <Show when={watcherList().some((w) => w.minimized)}>
+            <div style={{ 'margin-top': '8px', 'border-top': '1px solid var(--border)', 'padding-top': '8px' }}>
+              <div style={{ padding: '0 12px 4px', 'font-size': '8px', 'text-transform': 'uppercase', 'letter-spacing': '0.15em', color: 'var(--text-dim)' }}>
+                Minimized
+              </div>
+              <For each={watcherList().filter((w) => w.minimized)}>
+                {(w) => (
+                  <div
+                    onClick={() => restoreWindow(w.id)}
+                    title="Restore window"
+                    style={{
+                      display: 'flex',
+                      'align-items': 'center',
+                      gap: '8px',
+                      padding: '5px 12px',
+                      margin: '2px 8px',
+                      border: '1px solid var(--border)',
+                      cursor: 'pointer',
+                      'font-size': '10px',
+                      color: 'var(--text-muted)',
+                      background: 'rgba(0,0,0,0.2)',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-cyan)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent-cyan)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
+                  >
+                    <span style={{ 'font-size': '9px', 'flex-shrink': 0 }}>▢</span>
+                    <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{w.name}</span>
+                    <span style={{ 'font-size': '9px', color: 'var(--accent-cyan)', 'flex-shrink': 0 }}>↗</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
       </Show>
 
@@ -310,29 +346,11 @@ const AddWatcherModal: Component<ModalProps> = (props) => {
       order: maxOrder + 1,
     });
 
-    // Schedule polling
+    // Schedule polling — the shared runner reads config + schema defaults from the store.
     scheduleWatcher(
       id,
       interval(),
-      async () => {
-        const reg = getAllPlugins().find((p) => p.plugin.id === plugin!.plugin.id);
-        if (!reg) return;
-        setWatcher(id, { status: 'loading' });
-        try {
-          console.log(`[poll] Starting fetch for ${id} (${plugin!.plugin.id})`);
-          const raw = await reg.plugin.fetch(config());
-          console.log(`[poll] Fetch succeeded for ${id}, got:`, JSON.stringify(raw).slice(0, 200));
-          const events = reg.plugin.parse(raw, config());
-          console.log(`[poll] Parsed ${events.length} events for ${id}`);
-          for (const ev of events) {
-            ev.watcherId = id;
-            pushWatcherEvent(id, ev);
-          }
-        } catch (err) {
-          console.error(`[poll] Fetch failed for ${id}:`, err);
-          setWatcher(id, { status: 'error', lastError: String(err) });
-        }
-      },
+      () => runWatcherFetch(id),
       scheduleMode(),
       scheduleMode() === 'cron' ? cron() : undefined
     );

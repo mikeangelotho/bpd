@@ -1,5 +1,6 @@
 import { type Component, For, Show, createMemo, createSignal, createEffect, onCleanup, Switch, Match } from 'solid-js';
 import type { WatcherState, WatcherEvent } from '../types';
+import { parseYouTubeUrl } from '../plugins/youtube';
 
 interface Props {
   watcher: WatcherState;
@@ -20,7 +21,83 @@ const BodyRenderer: Component<Props> = (props) => {
       <Match when={pluginId() === 'google-trends'}><TrendsBody {...props} /></Match>
       <Match when={pluginId() === 'adsb-exchange'}><ADSBBody {...props} /></Match>
       <Match when={pluginId() === 'open-meteo'}><WeatherBody {...props} /></Match>
+      <Match when={pluginId() === 'youtube'}><YouTubeBody {...props} /></Match>
     </Switch>
+  );
+};
+
+// ─── YOUTUBE BODY — embedded player (click-to-play) ───
+const YouTubeBody: Component<Props> = (props) => {
+  const w = () => props.watcher;
+
+  // Prefer the resolved event payload; fall back to parsing config.url so the player
+  // renders instantly before the first fetch resolves.
+  const info = createMemo(() => {
+    const ev = [...w().events].reverse().find((e) => e.payload.source === 'youtube');
+    if (ev) {
+      return {
+        embedUrl: ev.payload.embedUrl as string,
+        watchUrl: (ev.payload.watchUrl as string) || '',
+        title: (ev.payload.title as string) || '',
+        author: (ev.payload.author as string) || '',
+      };
+    }
+    try {
+      const parsed = parseYouTubeUrl((w().config.url as string) || '');
+      return { embedUrl: parsed.embedUrl, watchUrl: parsed.watchUrl, title: '', author: '' };
+    } catch {
+      return null;
+    }
+  });
+
+  return (
+    <div style={{ padding: '0 12px 10px', display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
+      <Show
+        when={info()}
+        fallback={
+          <div style={{ color: 'var(--text-dim)', 'font-size': '10px', padding: '8px 0', 'text-align': 'center' }}>
+            Enter a YouTube video or live URL to play.
+          </div>
+        }
+      >
+        {(data) => (
+          <>
+            {/* 16:9 responsive player */}
+            <div style={{ position: 'relative', width: '100%', 'aspect-ratio': '16 / 9', overflow: 'hidden', 'border-radius': '2px', border: '1px solid var(--border)', background: '#000' }}>
+              <iframe
+                src={data().embedUrl}
+                title={data().title || 'YouTube player'}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+                allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                allowfullscreen
+                loading="lazy"
+              />
+            </div>
+
+            {/* Title + open link */}
+            <Show when={data().title}>
+              <div style={{ 'font-size': '11px', color: 'var(--text-primary)', 'line-height': 1.4, display: '-webkit-box', '-webkit-line-clamp': 2, '-webkit-box-orient': 'vertical', overflow: 'hidden' }}>
+                {data().title}
+              </div>
+            </Show>
+            <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'center', 'font-size': '9px', color: 'var(--text-dim)' }}>
+              <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{data().author}</span>
+              <Show when={data().watchUrl}>
+                <a
+                  href={data().watchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent-cyan)', 'text-decoration': 'none', 'flex-shrink': 0 }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  open on YouTube ↗
+                </a>
+              </Show>
+            </div>
+          </>
+        )}
+      </Show>
+    </div>
   );
 };
 

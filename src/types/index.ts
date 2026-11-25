@@ -31,7 +31,14 @@ export interface WatcherState {
   retryCount: number;
   retryDelay: number;         // ms, exponential backoff
   nextRetry: number;          // epoch ms
-  order: number;              // sort position in dashboard
+  order: number;              // sort position in dashboard (also seeds default window layout)
+
+  // ─── WINDOW-MANAGER LAYOUT ───
+  gridCol?: number;           // 0-based column start
+  gridRow?: number;           // 0-based row start
+  colSpan?: number;           // columns spanned (>=1)
+  rowSpan?: number;           // rows spanned (>=1)
+  minimized?: boolean;        // hidden into the sidebar tray (unmounts the window)
 }
 
 export interface Alert {
@@ -58,6 +65,7 @@ export interface AppState {
   currentView: View;
   viewMode: ViewMode;
   expandedWatcher: string | null;
+  maximizedWatcher: string | null;  // window maximized to fill the grid (in place)
   sidebarCollapsed: boolean;
   topbarHidden: boolean;
   editingWatcherId: string | null;

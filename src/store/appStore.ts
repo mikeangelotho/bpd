@@ -11,6 +11,7 @@ import type {
   ViewMode,
 } from '../types';
 import { runFilterEngine } from '../engine/filterEngine';
+import { getAllPlugins } from '../engine/pluginRegistry';
 import { saveToIndexedDB, loadFromIndexedDB } from './persistence';
 
 // ─── SEMANTIC FILTER PRESETS ───
@@ -77,6 +78,7 @@ const initialState: AppState = {
   currentView: 'dashboard',
   viewMode: 'grid',
   expandedWatcher: null,
+  maximizedWatcher: null,
   sidebarCollapsed: false,
   topbarHidden: false,
   editingWatcherId: null,
@@ -225,6 +227,103 @@ export function getOrderedWatchers(): WatcherState[] {
   return Object.values(state.watchers).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
+// ─── WINDOW-MANAGER LAYOUT ───
+// Windows tile in a CSS grid. Layout lives entirely in grid coordinates so moving/
+// resizing only mutates styles (never DOM order) — see Dashboard's stable-keyed <For>.
+
+export const GRID_COLS = 4;
+
+export interface WindowLayout {
+  gridCol: number;
+  gridRow: number;
+  colSpan: number;
+  rowSpan: number;
+}
+
+// Resolve a watcher's effective layout, deriving a default from `order` for watchers
+// persisted before the window manager existed, and clamping to stay on-grid.
+export function ensureLayout(w: WatcherState, cols: number = GRID_COLS): WindowLayout {
+  const colSpan = Math.max(1, Math.min(w.colSpan ?? 1, cols));
+  const rowSpan = Math.max(1, w.rowSpan ?? 1);
+  let gridCol: number;
+  let gridRow: number;
+  if (w.gridCol != null && w.gridRow != null) {
+    gridCol = w.gridCol;
+    gridRow = w.gridRow;
+  } else {
+    const order = w.order ?? 0;
+    gridCol = order % cols;
+    gridRow = Math.floor(order / cols);
+  }
+  gridCol = Math.max(0, Math.min(gridCol, cols - colSpan));
+  gridRow = Math.max(0, gridRow);
+  return { gridCol, gridRow, colSpan, rowSpan };
+}
+
+export function setWindowLayout(id: string, patch: Partial<WindowLayout>) {
+  if (!state.watchers[id]) return;
+  setState('watchers', id, patch);
+  saveToIndexedDB('watchers', unwrap(state.watchers));
+}
+
+// Move a window's top-left to (col,row). FancyZones-style swap: if another window covers
+// the target cell, exchange the two windows' origins (each keeps its own span).
+export function moveWindowToCell(id: string, col: number, row: number, cols: number = GRID_COLS) {
+  const w = state.watchers[id];
+  if (!w) return;
+  const me = ensureLayout(w, cols);
+  const targetCol = Math.max(0, Math.min(col, cols - me.colSpan));
+  const targetRow = Math.max(0, row);
+
+  const occupantId = Object.keys(state.watchers).find((oid) => {
+    if (oid === id) return false;
+    const o = state.watchers[oid];
+    if (o.minimized) return false;
+    const ol = ensureLayout(o, cols);
+    return (
+      targetCol >= ol.gridCol && targetCol < ol.gridCol + ol.colSpan &&
+      targetRow >= ol.gridRow && targetRow < ol.gridRow + ol.rowSpan
+    );
+  });
+
+  if (occupantId) {
+    const o = ensureLayout(state.watchers[occupantId], cols);
+    const occCol = Math.max(0, Math.min(me.gridCol, cols - o.colSpan));
+    setState('watchers', occupantId, { gridCol: occCol, gridRow: me.gridRow });
+    setState('watchers', id, { gridCol: targetCol, gridRow: targetRow });
+  } else {
+    setState('watchers', id, { gridCol: targetCol, gridRow: targetRow });
+  }
+  saveToIndexedDB('watchers', unwrap(state.watchers));
+}
+
+export function resizeWindow(id: string, colSpan: number, rowSpan: number, cols: number = GRID_COLS) {
+  const w = state.watchers[id];
+  if (!w) return;
+  const me = ensureLayout(w, cols);
+  const cs = Math.max(1, Math.min(colSpan, cols - me.gridCol));
+  const rs = Math.max(1, rowSpan);
+  setState('watchers', id, { colSpan: cs, rowSpan: rs });
+  saveToIndexedDB('watchers', unwrap(state.watchers));
+}
+
+export function minimizeWindow(id: string) {
+  if (!state.watchers[id]) return;
+  setState('watchers', id, { minimized: true });
+  if (state.maximizedWatcher === id) setState('maximizedWatcher', null);
+  saveToIndexedDB('watchers', unwrap(state.watchers));
+}
+
+export function restoreWindow(id: string) {
+  if (!state.watchers[id]) return;
+  setState('watchers', id, { minimized: false });
+  saveToIndexedDB('watchers', unwrap(state.watchers));
+}
+
+export function toggleMaximize(id: string) {
+  setState('maximizedWatcher', (cur) => (cur === id ? null : id));
+}
+
 // ─── PERSISTENCE RESTORE ───
 
 export async function restoreFromPersistence() {
@@ -251,10 +350,60 @@ export async function restoreFromPersistence() {
   }
 }
 
+// ─── SHARED WATCHER FETCH RUNNER ───
+// Single implementation of "poll this watcher once" used by every scheduling call site
+// (initial add, edit, AI-tool add, and reschedule-on-restore). Reads config fresh from
+// the store each run, applies plugin schema defaults, chunks large event batches to keep
+// the UI responsive, and records ok/error/empty status consistently.
+export async function runWatcherFetch(id: string): Promise<void> {
+  const w = state.watchers[id];
+  if (!w) return;
+
+  const reg = getAllPlugins().find((p) => p.plugin.id === w.pluginId);
+  if (!reg) {
+    setWatcher(id, { status: 'error', lastError: `Plugin "${w.pluginId}" not registered` });
+    return;
+  }
+
+  // Apply schema defaults over the stored config (handles older watchers missing fields).
+  const schema = reg.plugin.configSchema as Record<string, { default?: unknown }>;
+  const config: Record<string, unknown> = { ...unwrap(w.config) };
+  for (const [key, field] of Object.entries(schema)) {
+    if (config[key] === undefined && field.default !== undefined) {
+      config[key] = field.default;
+    }
+  }
+
+  setWatcher(id, { status: 'loading' });
+  try {
+    const raw = await reg.plugin.fetch(config);
+    const events = reg.plugin.parse(raw, config);
+
+    // Chunk large batches (OpenSky can return 1000+ aircraft) so we yield to the
+    // browser between store updates and never freeze the main thread.
+    const CHUNK = 50;
+    for (let i = 0; i < events.length; i += CHUNK) {
+      const chunk = events.slice(i, i + CHUNK);
+      for (const ev of chunk) ev.watcherId = id;
+      pushWatcherEvents(id, chunk);
+      if (i + CHUNK < events.length) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    // pushWatcherEvents marks status/lastFetch, but a legitimately empty result would
+    // otherwise leave the card stuck on "loading" — record success explicitly.
+    if (events.length === 0) {
+      setWatcher(id, { status: 'ok', lastFetch: Date.now() });
+    }
+  } catch (err) {
+    setWatcher(id, { status: 'error', lastError: String(err) });
+  }
+}
+
 // ─── RESCHEDULE ALL WATCHERS ───
 // Called after persistence restore to restart polling for all active watchers.
 // Must be invoked from the component layer (after plugins are registered).
-// Pass the getAllPlugins function to avoid circular deps.
 export function rescheduleAllWatchers(
   scheduleFn: (
     id: string,
@@ -263,44 +412,17 @@ export function rescheduleAllWatchers(
     scheduleMode?: 'interval' | 'cron',
     cron?: string,
   ) => void,
-  getAllPluginsFn: () => Array<{ plugin: { id: string; fetch: (c: Record<string, unknown>) => Promise<unknown>; parse: (r: unknown, c: Record<string, unknown>) => import('../types').WatcherEvent[]; configSchema: Record<string, { default?: unknown }> } }>,
 ) {
-  const plugins = getAllPluginsFn();
-  if (!plugins.length) return;
-
   for (const [id, w] of Object.entries(state.watchers)) {
     if (w.status === 'loading') continue; // skip in-flight
 
-    const plugin = plugins.find((p) => p.plugin.id === w.pluginId);
-    if (!plugin) continue;
-
-    const config = { ...w.config };
-    // Apply schema defaults
-    const schema = plugin.plugin.configSchema;
-    for (const [key, field] of Object.entries(schema)) {
-      if (config[key] === undefined && field.default !== undefined) {
-        config[key] = field.default;
-      }
-    }
+    const reg = getAllPlugins().find((p) => p.plugin.id === w.pluginId);
+    if (!reg) continue;
 
     scheduleFn(
       id,
       w.interval,
-      async () => {
-        const reg = plugins.find((p) => p.plugin.id === plugin!.plugin.id);
-        if (!reg) return;
-        setWatcher(id, { status: 'loading' });
-        try {
-          const raw = await reg.plugin.fetch(config);
-          const events = reg.plugin.parse(raw, config);
-          for (const ev of events) {
-            ev.watcherId = id;
-            pushWatcherEvent(id, ev);
-          }
-        } catch (err) {
-          setWatcher(id, { status: 'error', lastError: String(err) });
-        }
-      },
+      () => runWatcherFetch(id),
       w.scheduleMode || 'interval',
       w.cron,
     );

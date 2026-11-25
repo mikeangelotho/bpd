@@ -66,11 +66,13 @@ export const AIChat: Component<Props> = (props) => {
     try {
       setModelsLoading(true);
       setModelsError(null);
-      const resp = await fetch('http://localhost:11434/api/tags', {
+      // Same-origin proxy to the local Ollama server (see vite.config.ts).
+      const resp = await fetch('/api/ollama/api/tags', {
         signal: AbortSignal.timeout(5000),
       });
       if (!resp.ok) {
-        setModelsError(`HTTP ${resp.status}`);
+        setModelsError(resp.status >= 500 ? 'Ollama not running on server' : `HTTP ${resp.status}`);
+        setModelsLoading(false);
         return;
       }
       const data = await resp.json();

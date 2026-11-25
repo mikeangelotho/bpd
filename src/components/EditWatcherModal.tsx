@@ -1,5 +1,5 @@
 import { type Component, For, Show, createMemo, createSignal, onCleanup } from 'solid-js';
-import { state, setWatcher, setEditingWatcherId, pushWatcherEvent } from '../store/appStore';
+import { setWatcher, runWatcherFetch } from '../store/appStore';
 import { getAllPlugins, cancelWatcher, scheduleWatcher, describeCron } from '../engine/pluginRegistry';
 import type { WatcherState } from '../types';
 
@@ -32,38 +32,6 @@ function applySchemaDefaults(
     }
   }
   return merged;
-}
-
-// Build a fetch function that reads config from the STORE (not local signals)
-// so it survives modal close and always uses latest persisted state.
-function buildFetchFn(
-  watcherId: string,
-  pluginId: string,
-): () => Promise<void> {
-  return async () => {
-    // Read current config from the store — always fresh
-    const w = state.watchers[watcherId];
-    if (!w) return;
-
-    const pluginReg = getAllPlugins().find((p) => p.plugin.id === pluginId);
-    if (!pluginReg) return;
-
-    // Apply schema defaults at fetch time (handles old watchers missing fields)
-    const schema = pluginReg.plugin.configSchema as Record<string, { default?: unknown }>;
-    const config = applySchemaDefaults({ ...w.config }, schema);
-
-    setWatcher(watcherId, { status: 'loading' });
-    try {
-      const raw = await pluginReg.plugin.fetch(config);
-      const events = pluginReg.plugin.parse(raw, config);
-      for (const ev of events) {
-        ev.watcherId = watcherId;
-        pushWatcherEvent(watcherId, ev);
-      }
-    } catch (err) {
-      setWatcher(watcherId, { status: 'error', lastError: String(err) });
-    }
-  };
 }
 
 export const EditWatcherModal: Component<Props> = (props) => {
@@ -100,7 +68,7 @@ export const EditWatcherModal: Component<Props> = (props) => {
       scheduleWatcher(
         w().id,
         interval(),
-        buildFetchFn(w().id, p.plugin.id),
+        () => runWatcherFetch(w().id),
         scheduleMode(),
         scheduleMode() === 'cron' ? cron() : undefined,
       );
@@ -118,7 +86,7 @@ export const EditWatcherModal: Component<Props> = (props) => {
       scheduleWatcher(
         w().id,
         interval(),
-        buildFetchFn(w().id, p.plugin.id),
+        () => runWatcherFetch(w().id),
         scheduleMode(),
         scheduleMode() === 'cron' ? cron() : undefined,
       );
